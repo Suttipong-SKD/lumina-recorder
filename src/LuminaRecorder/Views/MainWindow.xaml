@@ -202,6 +202,14 @@
                             <TextBlock x:Name="HwText" Margin="2,10,0,0" FontSize="12" Foreground="{StaticResource Muted}" TextWrapping="Wrap"
                                        Text="ใช้การ์ดจอช่วยเข้ารหัส (NVIDIA / AMD / Intel) อัตโนมัติ ไฟล์เล็กและไม่กินเครื่อง"/>
 
+                            <Border Style="{StaticResource Card}" Margin="0,14,0,0">
+                                <StackPanel>
+                                    <CheckBox x:Name="AutoPauseCheck" Style="{StaticResource Switch}" Content="พักอัตโนมัติเมื่อวิดีโอหยุด" Click="AutoPause_Changed"/>
+                                    <TextBlock Margin="0,8,0,0" FontSize="12" Foreground="{StaticResource Muted}" TextWrapping="Wrap"
+                                               Text="อัดต่อเองเมื่อวิดีโอเรื่องเดิมเล่นต่อ ได้ไฟล์เดียวไม่มีช่วงค้าง ใช้ได้กับ YouTube, Netflix, Media Player, Spotify ฯลฯ"/>
+                                </StackPanel>
+                            </Border>
+
                             <DockPanel Margin="2,22,0,8">
                                 <TextBlock Text="ไฟล์ล่าสุด" Style="{StaticResource SectionLabel}" Margin="0"/>
                                 <Button x:Name="BtnOpenFolder" Style="{StaticResource LinkButton}" Content="เปิดโฟลเดอร์" HorizontalAlignment="Right" Click="BtnOpenFolder_Click"/>

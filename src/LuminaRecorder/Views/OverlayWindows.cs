@@ -161,6 +161,18 @@ namespace LuminaRecorder.Views
         bool _blink;
 
         public event Action StopRequested;
+        public event Action PauseRequested;
+        bool _autoPause;
+
+        /// <summary>Shows "auto-paused, waiting for the video" in place of the file size.</summary>
+        public void SetAutoPause(bool on, string what)
+        {
+            _autoPause = on;
+            _size.Text = on ? "พักอัตโนมัติ" : "";
+            _size.Foreground = on ? new SolidColorBrush(Color.FromRgb(0xFF, 0xC8, 0x3D)) : new SolidColorBrush(Color.FromRgb(0x9A, 0xA3, 0xB2));
+            ToolTip = on ? "รอวิดีโอเล่นต่อ" + (string.IsNullOrEmpty(what) ? "" : ": " + what) : null;
+            if (!on) Tick();
+        }
 
         const int W = 430, H = 54;
 
@@ -175,7 +187,7 @@ namespace LuminaRecorder.Views
             _pauseIcon = new Path { Data = (Geometry)res["IconPause"], Fill = Brushes.White, Width = 12, Height = 12, Stretch = Stretch.Uniform };
             _pause = new Button { Style = (Style)res["PillButton"], Content = _pauseIcon, Margin = new Thickness(3, 0, 3, 0), ToolTip = $"พัก / อัดต่อ ({settings.HotkeyPause})" };
             System.Windows.Automation.AutomationProperties.SetName(_pause, "พักการอัด");
-            _pause.Click += (s, e) => _rec.TogglePause();
+            _pause.Click += (s, e) => PauseRequested?.Invoke();
 
             _micSlash = new Path { Data = Geometry.Parse("M4,4 L20,20"), Stroke = new SolidColorBrush(Color.FromRgb(0xFF, 0x4D, 0x5E)), StrokeThickness = 2.2, Width = 16, Height = 16, Stretch = Stretch.Uniform, Visibility = Visibility.Collapsed };
             var micGrid = new Grid();
@@ -248,7 +260,7 @@ namespace LuminaRecorder.Views
             _time.Text = $"{(int)t.TotalHours:00}:{t.Minutes:00}:{t.Seconds:00}";
             try
             {
-                if (_rec.CurrentFile != null && File.Exists(_rec.CurrentFile))
+                if (!_autoPause && _rec.CurrentFile != null && File.Exists(_rec.CurrentFile))
                     _size.Text = MainWindow.FriendlySize(new FileInfo(_rec.CurrentFile).Length);
             }
             catch { }

@@ -34,6 +34,8 @@ namespace LuminaRecorder.Views
         RecordingBarWindow _bar;
         readonly List<RegionFrameWindow> _frames = new List<RegionFrameWindow>();
         WindowState _stateBeforeRecording = WindowState.Normal;
+        MediaWatcher _media;
+        bool _autoPaused;
 
         public MainWindow()
         {
@@ -80,6 +82,7 @@ namespace LuminaRecorder.Views
             ClicksCheck.IsChecked = _s.HighlightClicks;
             SysAudioCheck.IsChecked = _s.RecordSystemAudio;
             MicCheck.IsChecked = _s.RecordMicrophone;
+            AutoPauseCheck.IsChecked = _s.AutoPauseWithVideo;
 
             switch (_s.Mode)
             {
@@ -175,7 +178,7 @@ namespace LuminaRecorder.Views
             _hotkeys.UnregisterAll();
             var failed = new List<string>();
             if (!_hotkeys.Register(_s.HotkeyRecord, ToggleRecording)) failed.Add(_s.HotkeyRecord);
-            if (!_hotkeys.Register(_s.HotkeyPause, () => { if (_rec.IsBusy) _rec.TogglePause(); })) failed.Add(_s.HotkeyPause);
+            if (!_hotkeys.Register(_s.HotkeyPause, TogglePauseManual)) failed.Add(_s.HotkeyPause);
             if (!_hotkeys.Register(_s.HotkeyScreenshot, () => TakeScreenshot())) failed.Add(_s.HotkeyScreenshot);
             if (failed.Count > 0)
                 ShowToast($"ปุ่มลัด {string.Join(", ", failed)} ถูกโปรแกรมอื่นใช้อยู่ เปลี่ยนได้ในหน้าตั้งค่า");
@@ -435,6 +438,54 @@ namespace LuminaRecorder.Views
             RestartMeters();
         }
 
+        void AutoPause_Changed(object sender, RoutedEventArgs e)
+        {
+            _s.AutoPauseWithVideo = AutoPauseCheck.IsChecked == true;
+            _s.Save();
+            if (!_s.AutoPauseWithVideo) StopMediaWatcher(resume: true);
+            else if (_rec.IsBusy && _media == null) StartMediaWatcher();
+        }
+
+        void StartMediaWatcher()
+        {
+            StopMediaWatcher(resume: false);
+            _autoPaused = false;
+            _media = new MediaWatcher(_s.SpeakerDevice);
+            _media.ShouldPause += () =>
+            {
+                if (_rec.Status != RecorderStatus.Recording) return;
+                _autoPaused = true;
+                _rec.Pause();
+                _bar?.SetAutoPause(true, _media?.TrackedDescription);
+                SetStatus("พักอัตโนมัติ: วิดีโอหยุดอยู่ จะอัดต่อเมื่อเล่นต่อ");
+            };
+            _media.ShouldResume += () =>
+            {
+                if (_rec.Status != RecorderStatus.Paused || !_autoPaused) return;
+                _autoPaused = false;
+                _rec.Resume();
+                _bar?.SetAutoPause(false, null);
+            };
+            _ = _media.StartAsync();
+        }
+
+        void StopMediaWatcher(bool resume)
+        {
+            _media?.Dispose();
+            _media = null;
+            if (resume && _autoPaused && _rec.Status == RecorderStatus.Paused) _rec.Resume();
+            _autoPaused = false;
+            _bar?.SetAutoPause(false, null);
+        }
+
+        void TogglePauseManual()
+        {
+            if (!_rec.IsBusy) return;
+            _autoPaused = false; // a manual pause is never undone automatically
+            _bar?.SetAutoPause(false, null);
+            _rec.TogglePause();
+        }
+
         void Device_Changed(object sender, SelectionChangedEventArgs e)
         {
             if (_loading) return;
@@ -572,7 +623,9 @@ namespace LuminaRecorder.Views
 
             _bar = new RecordingBarWindow(_rec, bounds, barMonitor, _s);
             _bar.StopRequested += () => _rec.Stop();
+            _bar.PauseRequested += TogglePauseManual;
             _bar.Show();
+            if (_s.AutoPauseWithVideo) StartMediaWatcher();
         }
 
         void OnRecorderStatus(RecorderStatus st)
@@ -601,6 +654,7 @@ namespace LuminaRecorder.Views
 
         void OnRecordingDone(string path, string error)
         {
+            StopMediaWatcher(resume: false);
             _bar?.Close(); _bar = null;
             foreach (var f in _frames) f.Close();
             _frames.Clear();
@@ -764,6 +818,7 @@ namespace LuminaRecorder.Views
             _s.Save();
             SystemEvents.DisplaySettingsChanged -= OnDisplaysChanged;
             _meterTimer.Stop();
+            _media?.Dispose();
             _sysMeter?.Dispose();
             _micMeter?.Dispose();
             _hotkeys?.Dispose();

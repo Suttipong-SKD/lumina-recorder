@@ -29,6 +29,7 @@ namespace LuminaRecorder.Services
         public bool WebcamOverlay { get; set; } = false;
         public string WebcamDevice { get; set; }
 
+        public bool AutoPauseWithVideo { get; set; } = false;
         public int CountdownSeconds { get; set; } = 3;
         public bool MinimizeWhileRecording { get; set; } = true;
         public bool CopyScreenshotToClipboard { get; set; } = true;

@@ -132,6 +132,16 @@ namespace LuminaRecorder.Services
             _recorder.Stop();
         }
 
+        public void Pause()
+        {
+            if (_recorder != null && Status == RecorderStatus.Recording) { _recorder.Pause(); _clock.Stop(); }
+        }
+
+        public void Resume()
+        {
+            if (_recorder != null && Status == RecorderStatus.Paused) { _recorder.Resume(); _clock.Start(); }
+        }
+
         public void TogglePause()
         {
             if (_recorder == null) return;
