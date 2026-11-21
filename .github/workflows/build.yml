@@ -69,6 +69,12 @@ jobs:
           name: LuminaRecorder-${{ steps.ver.outputs.version }}
           path: dist/*
 
+      - name: Stable-name copies (links that never change between versions)
+        shell: pwsh
+        run: |
+          Copy-Item "dist/LuminaRecorder-Setup-${{ steps.ver.outputs.version }}.exe" dist/LuminaRecorder-Setup.exe
+          Copy-Item "dist/LuminaRecorder-Portable-${{ steps.ver.outputs.version }}.zip" dist/LuminaRecorder-Portable.zip
+
       - name: Publish "latest" download (main branch)
         if: github.ref == 'refs/heads/main'
         shell: pwsh
