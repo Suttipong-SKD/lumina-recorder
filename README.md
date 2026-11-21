@@ -1,0 +1,51 @@
+# Lumina Recorder
+
+โปรแกรมอัดหน้าจอสำหรับ Windows 10/11 ที่ใช้ง่าย หน้าตาทันสมัย และรองรับทั้งเครื่องที่มีจอเดียวและหลายจอ
+
+## ดาวน์โหลดและติดตั้ง
+
+1. ไปที่หน้า **Releases** ของ repo นี้ แล้วเลือก **latest**
+2. ดาวน์โหลด `LuminaRecorder-Setup-x.y.z.exe` แล้วดับเบิลคลิกเพื่อติดตั้ง
+   (ถ้าไม่อยากติดตั้ง ให้ใช้ `LuminaRecorder-Portable-x.y.z.zip` แตกไฟล์แล้วเปิด `LuminaRecorder.exe` ได้เลย
+   แต่เครื่องต้องมี [Visual C++ Runtime x64](https://aka.ms/vs/17/release/vc_redist.x64.exe))
+3. ถ้า Windows SmartScreen เตือน ให้กด *More info → Run anyway* (ไฟล์ยังไม่ได้เซ็นดิจิทัล)
+
+ไฟล์วิดีโอและภาพจะถูกเก็บที่ `วิดีโอ\Lumina Recorder` (เปลี่ยนได้ในหน้าตั้งค่า)
+
+## ความสามารถ
+
+| | |
+|---|---|
+| โหมดอัด | เต็มจอ · เลือกพื้นที่ · หน้าต่างโปรแกรม · ทุกจอพร้อมกัน |
+| หลายจอ | แผนผังจอตามตำแหน่งจริง, คลิกเลือกจอ, ลากเลือกพื้นที่คร่อมหลายจอ, คมชัดแม้แต่ละจอตั้งสเกลต่างกัน (Per‑Monitor DPI V2) |
+| เสียง | เสียงในเครื่อง + ไมโครโฟนพร้อมกัน, เลือกอุปกรณ์ได้, มีแถบระดับเสียง, ปิดไมค์ระหว่างอัดได้ |
+| วิดีโอ | MP4 (H.264 / H.265), 24/30/60 fps, ใช้การ์ดจอช่วยเข้ารหัส (NVIDIA/AMD/Intel) |
+| อื่น ๆ | จับภาพหน้าจอ PNG (+คัดลอกเข้าคลิปบอร์ด), นับถอยหลัง, ไฮไลต์การคลิก, กล้องเว็บแคมซ้อนมุมจอ, แถบควบคุมลอยที่ไม่ติดในวิดีโอ |
+
+### ปุ่มลัด (ใช้ได้แม้โปรแกรมถูกย่อ เปลี่ยนได้ในหน้าตั้งค่า)
+
+| ปุ่ม | การทำงาน |
+|---|---|
+| F9 | เริ่ม / หยุดอัด |
+| F10 | พัก / อัดต่อ |
+| F11 | จับภาพหน้าจอ |
+
+ตอนเลือกพื้นที่: ลากเมาส์เพื่อเลือก (ลากข้ามจอได้), คลิกเฉย ๆ = เลือกทั้งจอ, Enter = ใช้พื้นที่เดิม, Esc = ยกเลิก
+
+## สำหรับนักพัฒนา
+
+- C# / WPF บน .NET Framework 4.8 (มีในทุก Windows 10/11 อยู่แล้ว ไม่ต้องติดตั้ง runtime เพิ่ม)
+- การอัดใช้ [ScreenRecorderLib](https://github.com/sskodje/ScreenRecorderLib) (MIT) ซึ่งใช้ Windows Graphics Capture / Desktop Duplication + Media Foundation
+- Build: `dotnet build src/LuminaRecorder/LuminaRecorder.csproj -c Release -p:Platform=x64` บน Windows
+- GitHub Actions (`.github/workflows/build.yml`) จะ build ตัวติดตั้ง (Inno Setup) และไฟล์ zip ให้อัตโนมัติทุกครั้งที่ push ขึ้น `main` แล้วอัปโหลดไว้ที่ Release ชื่อ `latest`
+- สร้างเวอร์ชันจริง: สร้าง tag เช่น `v1.0.0` แล้ว push
+
+โครงสร้างโค้ด
+
+```
+src/LuminaRecorder/
+  Services/   RecorderService (อัดวิดีโอ), MonitorService (จอ/DPI), HotkeyService, AudioMeter, ScreenshotService, AppSettings
+  Views/      MainWindow, RegionSelector (เลือกพื้นที่หลายจอ), OverlayWindows (แถบควบคุม/นับถอยหลัง/กรอบพื้นที่), SettingsWindow
+  Themes/     Theme.xaml (สี ปุ่ม สวิตช์ ฯลฯ)
+installer/    สคริปต์ Inno Setup
+```

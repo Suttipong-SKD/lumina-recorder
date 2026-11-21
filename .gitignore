@@ -1,0 +1,6 @@
+bin/
+obj/
+dist/
+.vs/
+*.user
+installer/vc_redist.x64.exe

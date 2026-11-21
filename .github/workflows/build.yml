@@ -1,0 +1,70 @@
+name: Build Windows installer
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Version
+        id: ver
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF -like 'refs/tags/v*') { $v = $env:GITHUB_REF_NAME.TrimStart('v') }
+          else { $v = "0.1.$($env:GITHUB_RUN_NUMBER)" }
+          "version=$v" >> $env:GITHUB_OUTPUT
+
+      - name: Build
+        run: dotnet build src/LuminaRecorder/LuminaRecorder.csproj -c Release -p:Platform=x64 -p:Version=${{ steps.ver.outputs.version }}
+
+      - name: Portable zip
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          $src = 'src/LuminaRecorder/bin/x64/Release/net48'
+          Get-ChildItem $src -Recurse -Include *.pdb,*.xml | Remove-Item
+          Compress-Archive -Path "$src/*" -DestinationPath "dist/LuminaRecorder-Portable-${{ steps.ver.outputs.version }}.zip"
+
+      - name: Installer
+        shell: pwsh
+        run: |
+          Invoke-WebRequest https://aka.ms/vs/17/release/vc_redist.x64.exe -OutFile installer/vc_redist.x64.exe
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress; $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }
+          & $iscc "/DAppVersion=${{ steps.ver.outputs.version }}" installer/LuminaRecorder.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LuminaRecorder-${{ steps.ver.outputs.version }}
+          path: dist/*
+
+      - name: Publish "latest" download (main branch)
+        if: github.ref == 'refs/heads/main'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete latest --cleanup-tag -y 2>$null
+          gh release create latest dist/* --prerelease --title "Lumina Recorder (build ล่าสุด ${{ steps.ver.outputs.version }})" --notes "ไฟล์ติดตั้งล่าสุดจาก main · ดาวน์โหลด LuminaRecorder-Setup-*.exe แล้วดับเบิลคลิกเพื่อติดตั้ง"
+
+      - name: Publish release (tag)
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create $env:GITHUB_REF_NAME dist/* --title "Lumina Recorder $env:GITHUB_REF_NAME" --generate-notes
