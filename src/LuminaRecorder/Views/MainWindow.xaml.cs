@@ -47,6 +47,14 @@ namespace LuminaRecorder.Views
             _rec.StatusChanged += st => Dispatcher.BeginInvoke(new Action(() => OnRecorderStatus(st)));
             _rec.Completed += path => Dispatcher.BeginInvoke(new Action(() => OnRecordingDone(path, null)));
             _rec.Failed += err => Dispatcher.BeginInvoke(new Action(() => OnRecordingDone(null, err)));
+            _rec.SwitchedToSoftware += part => Dispatcher.BeginInvoke(new Action(() =>
+            {
+                // Don't try the graphics card again next time; the user can switch it back in Settings.
+                _s.HardwareEncoding = false;
+                _s.Save();
+                SetStatus("การ์ดจอเข้ารหัสไม่ทัน จึงเปลี่ยนไปใช้ CPU และอัดต่อในไฟล์ " + System.IO.Path.GetFileName(part));
+                _bar?.Flash("สลับไปใช้ CPU แล้ว อัดต่อ");
+            }));
 
             SystemEvents.DisplaySettingsChanged += OnDisplaysChanged;
             Loaded += OnLoaded;
@@ -665,12 +673,25 @@ namespace LuminaRecorder.Views
             if (error != null)
             {
                 SetStatus("อัดไม่สำเร็จ: " + error);
-                MessageBox.Show(this, "อัดไม่สำเร็จ\n\n" + error + "\n\nลองเปลี่ยนโหมด หรือปิด 'ใช้การ์ดจอช่วยเข้ารหัส' ในหน้าตั้งค่า",
+                var saved = _rec.Files.Where(f => File.Exists(f) && new FileInfo(f).Length > 0).Select(System.IO.Path.GetFileName).ToList();
+                RefreshRecent();
+                MessageBox.Show(this, "อัดไม่สำเร็จ\n\n" + error +
+                    (saved.Count > 0 ? "\n\nส่วนที่อัดไปแล้วถูกเก็บไว้: " + string.Join(", ", saved) : "") +
+                    "\n\nลองเปลี่ยนโหมด หรือปิด 'ใช้การ์ดจอช่วยเข้ารหัส' ในหน้าตั้งค่า",
                     "Lumina Recorder", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
-            SetStatus("บันทึกแล้ว: " + System.IO.Path.GetFileName(path));
-            ShowToast("บันทึกวิดีโอแล้ว · " + System.IO.Path.GetFileName(path));
+            var parts = _rec.Files.Where(File.Exists).ToList();
+            if (parts.Count > 1)
+            {
+                SetStatus($"บันทึกแล้ว {parts.Count} ไฟล์: " + string.Join(", ", parts.Select(System.IO.Path.GetFileName)));
+                ShowToast($"บันทึกแล้ว {parts.Count} ไฟล์ (แยกไฟล์ตอนสลับไปใช้ CPU)");
+            }
+            else
+            {
+                SetStatus("บันทึกแล้ว: " + System.IO.Path.GetFileName(path));
+                ShowToast("บันทึกวิดีโอแล้ว · " + System.IO.Path.GetFileName(path));
+            }
             RefreshRecent();
         }
 

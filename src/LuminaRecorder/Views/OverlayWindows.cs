@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
@@ -164,6 +165,15 @@ namespace LuminaRecorder.Views
         public event Action PauseRequested;
         bool _autoPause;
 
+        /// <summary>Briefly shows a notice in place of the file size.</summary>
+        public void Flash(string text)
+        {
+            _flashUntil = DateTime.Now.AddSeconds(5);
+            _size.Text = text;
+            _size.Foreground = new SolidColorBrush(Color.FromRgb(0xFF, 0xC8, 0x3D));
+        }
+        DateTime _flashUntil;
+
         /// <summary>Shows "auto-paused, waiting for the video" in place of the file size.</summary>
         public void SetAutoPause(bool on, string what)
         {
@@ -260,8 +270,11 @@ namespace LuminaRecorder.Views
             _time.Text = $"{(int)t.TotalHours:00}:{t.Minutes:00}:{t.Seconds:00}";
             try
             {
-                if (!_autoPause && _rec.CurrentFile != null && File.Exists(_rec.CurrentFile))
-                    _size.Text = MainWindow.FriendlySize(new FileInfo(_rec.CurrentFile).Length);
+                if (!_autoPause && DateTime.Now > _flashUntil && _rec.CurrentFile != null && File.Exists(_rec.CurrentFile))
+                {
+                    _size.Foreground = new SolidColorBrush(Color.FromRgb(0x9A, 0xA3, 0xB2));
+                    _size.Text = MainWindow.FriendlySize(_rec.Files.Where(File.Exists).Sum(f => new FileInfo(f).Length));
+                }
             }
             catch { }
             if (_rec.Status == RecorderStatus.Paused)

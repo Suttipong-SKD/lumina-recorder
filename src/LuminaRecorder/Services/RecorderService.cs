@@ -49,6 +49,15 @@ namespace LuminaRecorder.Services
         bool _triedFallbackApi;
         bool _useDesktopDuplication;
         DateTime _startedAt;
+        bool _hardware;
+        int _segment;
+        readonly List<string> _files = new List<string>();
+        string _baseFile;
+
+        /// <summary>Raised when the graphics card encoder failed and recording continued with the CPU encoder.</summary>
+        public event Action<string> SwitchedToSoftware;   // path of the new part file
+        /// <summary>All files written by the last recording (more than one if the encoder had to be switched).</summary>
+        public IReadOnlyList<string> Files => _files;
 
         public event Action<RecorderStatus> StatusChanged;
         public event Action<string> Completed;   // file path
@@ -71,16 +80,24 @@ namespace LuminaRecorder.Services
             _settings = settings;
             _triedFallbackApi = false;
             _useDesktopDuplication = !SupportsGraphicsCapture;
-            CurrentFile = NewFileName(settings.EffectiveOutputFolder, "mp4");
-            StartInternal();
+            _hardware = settings.HardwareEncoding;
+            _segment = 1;
+            _files.Clear();
+            _baseFile = NewFileName(settings.EffectiveOutputFolder, "mp4");
+            CurrentFile = _baseFile;
+            StartInternal(resetClock: true);
         }
 
         static bool SupportsGraphicsCapture => Environment.OSVersion.Version.Build >= 19041;
 
-        void StartInternal()
+        void StartInternal() => StartInternal(true);
+
+        void StartInternal(bool resetClock)
         {
             DisposeRecorder();
             var options = BuildOptions(_target, _settings, _useDesktopDuplication, out _micSource);
+            options.VideoEncoderOptions.IsHardwareEncodingEnabled = _hardware;
+            if (!_files.Contains(CurrentFile)) _files.Add(CurrentFile);
             _micMuted = false;
             _recorder = Recorder.CreateRecorder(options);
             _recorder.OnStatusChanged += (s, e) => OnStatus(e.Status);
@@ -102,17 +119,41 @@ namespace LuminaRecorder.Services
                     System.Windows.Application.Current?.Dispatcher.BeginInvoke(new Action(StartInternal));
                     return;
                 }
+                // The graphics card encoder can stall after a while (0xC00D36B5 MF_E_NOTACCEPTING and similar).
+                // Keep recording: continue straight away into a new part file using the CPU encoder.
+                if (_hardware && Status != RecorderStatus.Finishing && IsEncoderError(e.Error))
+                {
+                    _hardware = false;
+                    _segment++;
+                    CurrentFile = Path.Combine(Path.GetDirectoryName(_baseFile),
+                        Path.GetFileNameWithoutExtension(_baseFile) + $"_part{_segment}.mp4");
+                    var next = CurrentFile;
+                    System.Windows.Application.Current?.Dispatcher.BeginInvoke(new Action(() =>
+                    {
+                        StartInternal(resetClock: false);
+                        SwitchedToSoftware?.Invoke(next);
+                    }));
+                    return;
+                }
                 _clock.Stop();
                 Status = RecorderStatus.Idle;
                 StatusChanged?.Invoke(Status);
                 Failed?.Invoke(e.Error);
             };
             _startedAt = DateTime.Now;
-            _clock.Reset();
+            if (resetClock) _clock.Reset();
             _clock.Start();
             Status = RecorderStatus.Recording;
             StatusChanged?.Invoke(Status);
             _recorder.Record(CurrentFile);
+        }
+
+        static bool IsEncoderError(string error)
+        {
+            if (string.IsNullOrEmpty(error)) return true;
+            var e = error.ToLowerInvariant();
+            return e.Contains("encoder") || e.Contains("0xc00d36b5") || e.Contains("hardware") || e.Contains("not accepting")
+                   || e.Contains("0x887a0005") || e.Contains("0x887a0006"); // GPU device removed / hung
         }
 
         void OnStatus(RecorderStatus s)
