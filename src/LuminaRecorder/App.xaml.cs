@@ -28,8 +28,28 @@ namespace LuminaRecorder
         void OnUiException(object sender, DispatcherUnhandledExceptionEventArgs e)
         {
             Log(e.Exception);
-            MessageBox.Show("เกิดข้อผิดพลาด: " + e.Exception.Message, "Lumina Recorder", MessageBoxButton.OK, MessageBoxImage.Warning);
             e.Handled = true;
+            if (IsMissingRuntime(e.Exception))
+            {
+                var r = MessageBox.Show(
+                    "เครื่องนี้ยังไม่มี Microsoft Visual C++ Runtime (x64) ที่โปรแกรมต้องใช้ในการอัดวิดีโอ\n\n" +
+                    "กด OK เพื่อเปิดหน้าดาวน์โหลด ติดตั้งแล้วเปิด Lumina Recorder ใหม่อีกครั้ง",
+                    "Lumina Recorder", MessageBoxButton.OKCancel, MessageBoxImage.Warning);
+                if (r == MessageBoxResult.OK)
+                    try { System.Diagnostics.Process.Start("https://aka.ms/vs/17/release/vc_redist.x64.exe"); } catch { }
+                Shutdown();
+                return;
+            }
+            MessageBox.Show("เกิดข้อผิดพลาด: " + e.Exception.Message, "Lumina Recorder", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+
+        static bool IsMissingRuntime(Exception ex)
+        {
+            for (var x = ex; x != null; x = x.InnerException)
+                if ((x is FileNotFoundException || x is FileLoadException || x is BadImageFormatException) &&
+                    x.Message.IndexOf("ScreenRecorderLib", StringComparison.OrdinalIgnoreCase) >= 0)
+                    return true;
+            return false;
         }
 
         internal static void Log(Exception ex)

@@ -34,22 +34,12 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs; Excludes: "*.pdb,*.xml"
-Source: "vc_redist.x64.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall; Check: NeedsVCRedist
+Source: "vc_redist.x64.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall
 
 [Icons]
 Name: "{autoprograms}\Lumina Recorder"; Filename: "{app}\LuminaRecorder.exe"
 Name: "{autodesktop}\Lumina Recorder"; Filename: "{app}\LuminaRecorder.exe"; Tasks: desktopicon
 
 [Run]
-Filename: "{tmp}\vc_redist.x64.exe"; Parameters: "/install /quiet /norestart"; StatusMsg: "Installing Visual C++ runtime..."; Check: NeedsVCRedist; Flags: waituntilterminated
+Filename: "{tmp}\vc_redist.x64.exe"; Parameters: "/install /quiet /norestart"; StatusMsg: "Installing Visual C++ runtime..."; Flags: waituntilterminated
 Filename: "{app}\LuminaRecorder.exe"; Description: "{cm:LaunchProgram,Lumina Recorder}"; Flags: nowait postinstall skipifsilent
-
-[Code]
-function NeedsVCRedist: Boolean;
-var
-  Installed: Cardinal;
-begin
-  Result := True;
-  if RegQueryDWordValue(HKLM64, 'SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64', 'Installed', Installed) then
-    Result := Installed <> 1;
-end;

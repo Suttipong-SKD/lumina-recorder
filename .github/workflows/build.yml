@@ -31,6 +31,22 @@ jobs:
       - name: Build
         run: dotnet build src/LuminaRecorder/LuminaRecorder.csproj -c Release -p:Platform=x64 -p:Version=${{ steps.ver.outputs.version }}
 
+      - name: Bundle Visual C++ runtime next to the exe (app-local, no separate install needed)
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath
+          $crt = Get-ChildItem "$vs\VC\Redist\MSVC" -Directory | Sort-Object Name -Descending |
+                 ForEach-Object { Get-ChildItem "$($_.FullName)\x64" -Directory -Filter 'Microsoft.VC*.CRT' -ErrorAction SilentlyContinue } |
+                 Select-Object -First 1
+          if (-not $crt) { throw 'VC++ CRT redist folder not found' }
+          Write-Host "Using $($crt.FullName)"
+          $out = 'src/LuminaRecorder/bin/x64/Release/net48'
+          Copy-Item "$($crt.FullName)\*.dll" $out
+          foreach ($f in 'msvcp140.dll','vcruntime140.dll','vcruntime140_1.dll','concrt140.dll','ScreenRecorderLib.dll') {
+            if (-not (Test-Path "$out\$f")) { throw "missing $f in output" }
+          }
+          Get-ChildItem $out | Format-Table Name, Length
+
       - name: Portable zip
         shell: pwsh
         run: |
