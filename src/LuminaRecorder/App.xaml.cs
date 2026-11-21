@@ -1,5 +1,7 @@
 using System;
+using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Windows;
 using System.Windows.Threading;
@@ -12,10 +14,8 @@ namespace LuminaRecorder
 
         protected override void OnStartup(StartupEventArgs e)
         {
-            _single = new Mutex(true, "LuminaRecorder.SingleInstance", out bool first);
-            if (!first)
+            if (!AcquireSingleInstance())
             {
-                MessageBox.Show("Lumina Recorder เปิดอยู่แล้ว", "Lumina Recorder", MessageBoxButton.OK, MessageBoxImage.Information);
                 Shutdown();
                 return;
             }
@@ -41,6 +41,40 @@ namespace LuminaRecorder
                 return;
             }
             MessageBox.Show("เกิดข้อผิดพลาด: " + e.Exception.Message, "Lumina Recorder", MessageBoxButton.OK, MessageBoxImage.Warning);
+            // If the main window never came up, don't stay alive invisibly in the background.
+            if (MainWindow == null || !MainWindow.IsLoaded) Shutdown();
+        }
+
+        /// <summary>
+        /// One instance at a time. If another copy is already running with a window, bring it to the front.
+        /// If the other copy has no window (it failed to start and got stuck), end it and carry on.
+        /// </summary>
+        static bool AcquireSingleInstance()
+        {
+            _single = new Mutex(true, "LuminaRecorder.SingleInstance", out bool first);
+            if (first) return true;
+
+            var me = Process.GetCurrentProcess();
+            var others = Process.GetProcessesByName(me.ProcessName).Where(p => p.Id != me.Id).ToList();
+            var withWindow = others.FirstOrDefault(p => { try { p.Refresh(); return p.MainWindowHandle != IntPtr.Zero; } catch { return false; } });
+            if (withWindow != null)
+            {
+                Services.Native.ShowWindow(withWindow.MainWindowHandle, Services.Native.SW_RESTORE);
+                Services.Native.SetForegroundWindow(withWindow.MainWindowHandle);
+                return false;
+            }
+
+            foreach (var p in others)
+                try { p.Kill(); p.WaitForExit(3000); } catch { }
+            try
+            {
+                if (_single.WaitOne(3000)) return true;
+            }
+            catch (AbandonedMutexException) { return true; }
+
+            MessageBox.Show("Lumina Recorder เปิดอยู่แล้ว ถ้าไม่เห็นหน้าต่าง ให้ปิด LuminaRecorder ใน Task Manager แล้วเปิดใหม่",
+                "Lumina Recorder", MessageBoxButton.OK, MessageBoxImage.Information);
+            return false;
         }
 
         static bool IsMissingRuntime(Exception ex)
