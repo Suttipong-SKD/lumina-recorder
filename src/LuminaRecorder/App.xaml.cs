@@ -20,9 +20,70 @@ namespace LuminaRecorder
                 return;
             }
 
+            ConfigureRendering(e.Args);
+            LogSystemInfo();
             DispatcherUnhandledException += OnUiException;
             AppDomain.CurrentDomain.UnhandledException += (s, a) => Log(a.ExceptionObject as Exception);
             base.OnStartup(e);
+        }
+
+        // ---- graphics-driver safety ------------------------------------------------------------------------------
+        // A new GPU driver can crash WPF's hardware rendering at startup, before any managed error can be logged.
+        // We drop a marker file while starting; if it is still there next time, the last start crashed hard, so
+        // we switch WPF to software rendering (and keep it that way until --hardware-render is passed).
+
+        internal static bool SafeRendering { get; private set; }
+        static string DataDir => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "LuminaRecorder");
+        static string StartingFlag => Path.Combine(DataDir, "starting.flag");
+        static string SoftwareFlag => Path.Combine(DataDir, "software-render.flag");
+
+        static void ConfigureRendering(string[] args)
+        {
+            try
+            {
+                Directory.CreateDirectory(DataDir);
+                bool forceSoft = args.Any(a => a.Equals("--software-render", StringComparison.OrdinalIgnoreCase));
+                bool forceHard = args.Any(a => a.Equals("--hardware-render", StringComparison.OrdinalIgnoreCase));
+                if (forceHard) { File.Delete(SoftwareFlag); File.Delete(StartingFlag); }
+                if (forceSoft || File.Exists(StartingFlag)) File.WriteAllText(SoftwareFlag, DateTime.Now.ToString("s"));
+                if (File.Exists(SoftwareFlag))
+                {
+                    System.Windows.Media.RenderOptions.ProcessRenderMode = System.Windows.Interop.RenderMode.SoftwareOnly;
+                    SafeRendering = true;
+                }
+                File.WriteAllText(StartingFlag, DateTime.Now.ToString("s"));
+            }
+            catch { }
+        }
+
+        /// <summary>Called once the main window has been drawn: the start did not crash.</summary>
+        internal static void MarkStartedOk()
+        {
+            try { File.Delete(StartingFlag); } catch { }
+        }
+
+        protected override void OnExit(ExitEventArgs e)
+        {
+            MarkStartedOk();
+            base.OnExit(e);
+        }
+
+        /// <summary>Writes OS and graphics-card/driver details to error.log so driver problems can be diagnosed.</summary>
+        static void LogSystemInfo()
+        {
+            System.Threading.Tasks.Task.Run(() =>
+            {
+                try
+                {
+                    var sb = new System.Text.StringBuilder();
+                    sb.AppendLine($"Lumina Recorder {typeof(App).Assembly.GetName().Version} · Windows {Environment.OSVersion.Version} · render={(SafeRendering ? "software" : "hardware")}");
+                    using (var q = new System.Management.ManagementObjectSearcher("SELECT Name, DriverVersion, DriverDate FROM Win32_VideoController"))
+                        foreach (System.Management.ManagementObject o in q.Get())
+                            sb.AppendLine($"  GPU: {o["Name"]} · driver {o["DriverVersion"]} · {o["DriverDate"]}");
+                    File.AppendAllText(Path.Combine(DataDir, "system.log"), $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {sb}");
+                }
+                catch { }
+            });
         }
 
         void OnUiException(object sender, DispatcherUnhandledExceptionEventArgs e)

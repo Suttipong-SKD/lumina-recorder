@@ -30,6 +30,7 @@
 
   <ItemGroup>
     <Reference Include="System.Xml" />
+    <Reference Include="System.Management" />
     <Resource Include="Assets\app.ico" />
   </ItemGroup>
 

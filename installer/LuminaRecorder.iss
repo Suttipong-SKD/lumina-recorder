@@ -38,6 +38,7 @@ Source: "vc_redist.x64.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall
 
 [Icons]
 Name: "{autoprograms}\Lumina Recorder"; Filename: "{app}\LuminaRecorder.exe"
+Name: "{autoprograms}\Lumina Recorder (Safe mode)"; Filename: "{app}\LuminaRecorder.exe"; Parameters: "--software-render"
 Name: "{autodesktop}\Lumina Recorder"; Filename: "{app}\LuminaRecorder.exe"; Tasks: desktopicon
 
 [Run]

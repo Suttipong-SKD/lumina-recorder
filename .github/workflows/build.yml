@@ -47,6 +47,13 @@ jobs:
           }
           Get-ChildItem $out | Format-Table Name, Length
 
+      - name: Safe-mode launcher
+        shell: pwsh
+        run: |
+          $out = 'src/LuminaRecorder/bin/x64/Release/net48'
+          $bat = "@echo off`r`nrem Starts Lumina Recorder with software rendering (use if the window is blank or crashes after a graphics-driver update)`r`nstart `"`" `"%~dp0LuminaRecorder.exe`" --software-render`r`n"
+          [IO.File]::WriteAllText("$out/LuminaRecorder-SafeMode.bat", $bat)
+
       - name: Portable zip
         shell: pwsh
         run: |

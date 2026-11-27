@@ -47,13 +47,10 @@ namespace LuminaRecorder.Views
             _rec.StatusChanged += st => Dispatcher.BeginInvoke(new Action(() => OnRecorderStatus(st)));
             _rec.Completed += path => Dispatcher.BeginInvoke(new Action(() => OnRecordingDone(path, null)));
             _rec.Failed += err => Dispatcher.BeginInvoke(new Action(() => OnRecordingDone(null, err)));
-            _rec.SwitchedToSoftware += part => Dispatcher.BeginInvoke(new Action(() =>
+            _rec.ProfileChanged += (what, part) => Dispatcher.BeginInvoke(new Action(() =>
             {
-                // Don't try the graphics card again next time; the user can switch it back in Settings.
-                _s.HardwareEncoding = false;
-                _s.Save();
-                SetStatus("การ์ดจอเข้ารหัสไม่ทัน จึงเปลี่ยนไปใช้ CPU และอัดต่อในไฟล์ " + System.IO.Path.GetFileName(part));
-                _bar?.Flash("สลับไปใช้ CPU แล้ว อัดต่อ");
+                SetStatus("ปรับการอัดให้เข้ากับไดรเวอร์/การ์ดจอ: " + what + " · อัดต่อในไฟล์ " + System.IO.Path.GetFileName(part));
+                _bar?.Flash("ปรับวิธีอัด อัดต่อแล้ว");
             }));
 
             SystemEvents.DisplaySettingsChanged += OnDisplaysChanged;
@@ -101,6 +98,14 @@ namespace LuminaRecorder.Views
             }
 
             _loading = false;
+            ContentRendered += (s2, e2) =>
+            {
+                // drawn without crashing: the graphics driver and WPF get along
+                var t = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+                t.Tick += (s3, e3) => { t.Stop(); App.MarkStartedOk(); };
+                t.Start();
+                if (App.SafeRendering) ShowToast("เปิดในโหมดแสดงผลปลอดภัย (เพราะเปิดครั้งก่อนค้าง น่าจะเป็นเรื่องไดรเวอร์การ์ดจอ)");
+            };
             ApplyMode();
             RestartMeters();
             RefreshRecent();
@@ -670,6 +675,17 @@ namespace LuminaRecorder.Views
             BtnRecord.IsEnabled = true;
             RestoreAfterRecording();
 
+            // A fallback setup recorded successfully: remember it so the next recording works first time.
+            if (error == null && _rec.UsingFallback)
+            {
+                _s.HardwareEncoding = _rec.FallbackHardware;
+                _s.UseH265 = _rec.FallbackH265;
+                _s.Save();
+                _loading = true;
+                try { FormatBox.SelectedItem = FormatBox.Items.Cast<ComboBoxItem>().FirstOrDefault(i => (string)i.Tag == (_s.UseH265 ? "h265" : "h264")) ?? FormatBox.SelectedItem; }
+                finally { _loading = false; }
+            }
+
             if (error != null)
             {
                 SetStatus("อัดไม่สำเร็จ: " + error);
@@ -677,7 +693,7 @@ namespace LuminaRecorder.Views
                 RefreshRecent();
                 MessageBox.Show(this, "อัดไม่สำเร็จ\n\n" + error +
                     (saved.Count > 0 ? "\n\nส่วนที่อัดไปแล้วถูกเก็บไว้: " + string.Join(", ", saved) : "") +
-                    "\n\nลองเปลี่ยนโหมด หรือปิด 'ใช้การ์ดจอช่วยเข้ารหัส' ในหน้าตั้งค่า",
+                    "\n\nโปรแกรมลองวิธีอัดสำรองทุกแบบแล้ว (CPU, H.264, ตัวจับภาพอีกแบบ) รายละเอียดอยู่ที่ %AppData%\\LuminaRecorder\\error.log",
                     "Lumina Recorder", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }

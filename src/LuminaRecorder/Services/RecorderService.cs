@@ -46,17 +46,32 @@ namespace LuminaRecorder.Services
         bool _micMuted;
         CaptureTarget _target;
         AppSettings _settings;
-        bool _triedFallbackApi;
-        bool _useDesktopDuplication;
         DateTime _startedAt;
-        bool _hardware;
         int _segment;
+        int _generation;
         readonly List<string> _files = new List<string>();
         string _baseFile;
 
-        /// <summary>Raised when the graphics card encoder failed and recording continued with the CPU encoder.</summary>
-        public event Action<string> SwitchedToSoftware;   // path of the new part file
-        /// <summary>All files written by the last recording (more than one if the encoder had to be switched).</summary>
+        /// <summary>How to record: capture API, graphics-card or CPU encoder, H.265 or H.264.</summary>
+        sealed class Profile
+        {
+            public bool DesktopDuplication, Hardware, H265;
+            public string Describe() =>
+                (Hardware ? "การ์ดจอ" : "CPU") + " · " + (H265 ? "H.265" : "H.264") + " · " +
+                (DesktopDuplication ? "Desktop Duplication" : "Graphics Capture");
+        }
+
+        List<Profile> _ladder = new List<Profile>();
+        int _step;
+
+        /// <summary>Raised when recording had to switch to a safer setup (after a driver or encoder problem).</summary>
+        public event Action<string, string> ProfileChanged;   // description, file now being written
+        /// <summary>The setup that is currently recording is not the one in Settings.</summary>
+        public bool UsingFallback => _step > 0;
+        public bool FallbackHardware => _ladder.Count > 0 && _ladder[_step].Hardware;
+        public bool FallbackH265 => _ladder.Count > 0 && _ladder[_step].H265;
+
+        /// <summary>All files written by the last recording (more than one if the setup had to be switched).</summary>
         public IReadOnlyList<string> Files => _files;
 
         public event Action<RecorderStatus> StatusChanged;
@@ -78,74 +93,123 @@ namespace LuminaRecorder.Services
             if (IsBusy) return;
             _target = target;
             _settings = settings;
-            _triedFallbackApi = false;
-            _useDesktopDuplication = !SupportsGraphicsCapture;
-            _hardware = settings.HardwareEncoding;
             _segment = 1;
             _files.Clear();
             _baseFile = NewFileName(settings.EffectiveOutputFolder, "mp4");
             CurrentFile = _baseFile;
-            StartInternal(resetClock: true);
+            BuildLadder();
+            _step = 0;
+            _clock.Reset();
+            StartSegment(resetClock: true);
         }
 
         static bool SupportsGraphicsCapture => Environment.OSVersion.Version.Build >= 19041;
 
-        void StartInternal() => StartInternal(true);
+        /// <summary>
+        /// Ordered list of setups to try. A new graphics driver can break the hardware H.265 encoder, the hardware
+        /// encoder in general, or the capture API; each step removes one more thing that depends on the driver.
+        /// </summary>
+        void BuildLadder()
+        {
+            bool dd = !SupportsGraphicsCapture;
+            var list = new List<Profile> { new Profile { DesktopDuplication = dd, Hardware = _settings.HardwareEncoding, H265 = _settings.UseH265 } };
+            void Add(bool ddd, bool hw, bool h265)
+            {
+                if (!list.Any(p => p.DesktopDuplication == ddd && p.Hardware == hw && p.H265 == h265))
+                    list.Add(new Profile { DesktopDuplication = ddd, Hardware = hw, H265 = h265 });
+            }
+            if (_settings.UseH265 && _settings.HardwareEncoding) Add(dd, true, false);   // hardware H.264 is far more mature
+            Add(dd, false, false);                                                         // CPU H.264 always exists in Windows
+            if (_target.Mode != CaptureMode.Window)                                        // Desktop Duplication cannot capture one window
+                Add(!dd, false, false);
+            _ladder = list;
+        }
 
-        void StartInternal(bool resetClock)
+        void StartSegment(bool resetClock)
         {
             DisposeRecorder();
-            var options = BuildOptions(_target, _settings, _useDesktopDuplication, out _micSource);
-            options.VideoEncoderOptions.IsHardwareEncodingEnabled = _hardware;
-            if (!_files.Contains(CurrentFile)) _files.Add(CurrentFile);
-            _micMuted = false;
-            _recorder = Recorder.CreateRecorder(options);
-            _recorder.OnStatusChanged += (s, e) => OnStatus(e.Status);
-            _recorder.OnRecordingComplete += (s, e) =>
+            int gen = ++_generation;
+            var profile = _ladder[_step];
+            try
             {
-                _clock.Stop();
-                Status = RecorderStatus.Idle;
-                StatusChanged?.Invoke(Status);
-                Completed?.Invoke(e.FilePath);
-            };
-            _recorder.OnRecordingFailed += (s, e) =>
-            {
-                // Windows Graphics Capture can fail on some multi-GPU laptops: retry once with Desktop Duplication.
-                if (!_triedFallbackApi && !_useDesktopDuplication && _target.Mode != CaptureMode.Window
-                    && (DateTime.Now - _startedAt).TotalSeconds < 3)
+                var options = BuildOptions(_target, _settings, profile.DesktopDuplication, out _micSource);
+                options.VideoEncoderOptions.IsHardwareEncodingEnabled = profile.Hardware;
+                options.VideoEncoderOptions.Encoder = profile.H265
+                    ? (IVideoEncoder)new H265VideoEncoder { BitrateMode = H265BitrateControlMode.Quality, EncoderProfile = H265Profile.Main }
+                    : new H264VideoEncoder { BitrateMode = H264BitrateControlMode.Quality, EncoderProfile = H264Profile.High };
+                if (!_files.Contains(CurrentFile)) _files.Add(CurrentFile);
+                _micMuted = false;
+                _recorder = Recorder.CreateRecorder(options);
+                _recorder.OnStatusChanged += (s, e) => { if (gen == _generation) OnStatus(e.Status); };
+                _recorder.OnRecordingComplete += (s, e) =>
                 {
-                    _triedFallbackApi = true;
-                    _useDesktopDuplication = true;
-                    System.Windows.Application.Current?.Dispatcher.BeginInvoke(new Action(StartInternal));
+                    if (gen != _generation) return;
+                    _clock.Stop();
+                    Status = RecorderStatus.Idle;
+                    StatusChanged?.Invoke(Status);
+                    Completed?.Invoke(e.FilePath);
+                };
+                _recorder.OnRecordingFailed += (s, e) =>
+                {
+                    if (gen != _generation) return;
+                    OnSegmentFailed(e.Error);
+                };
+                _startedAt = DateTime.Now;
+                if (resetClock) _clock.Reset();
+                _clock.Start();
+                Status = RecorderStatus.Recording;
+                StatusChanged?.Invoke(Status);
+                _recorder.Record(CurrentFile);
+            }
+            catch (Exception ex)
+            {
+                App.Log(ex);
+                // Don't call back into ourselves from inside the failing call: hand over to the dispatcher.
+                var msg = ex.Message;
+                Dispatch(() => OnSegmentFailed(msg));
+            }
+        }
+
+        static void Dispatch(Action a)
+        {
+            var d = System.Windows.Application.Current?.Dispatcher;
+            if (d != null) d.BeginInvoke(a); else a();
+        }
+
+        void OnSegmentFailed(string error)
+        {
+            Dispatch(() =>
+            {
+                App.Log(new Exception($"Recording failed with {_ladder[_step].Describe()}: {error}"));
+                bool early = (DateTime.Now - _startedAt).TotalSeconds < 6;          // never got going: a setup problem
+                bool canFallBack = _step < _ladder.Count - 1 && Status != RecorderStatus.Finishing &&
+                                   (early || IsEncoderError(error));
+                if (!canFallBack)
+                {
+                    DisposeRecorder();
+                    _clock.Stop();
+                    Status = RecorderStatus.Idle;
+                    StatusChanged?.Invoke(Status);
+                    Failed?.Invoke(error);
                     return;
                 }
-                // The graphics card encoder can stall after a while (0xC00D36B5 MF_E_NOTACCEPTING and similar).
-                // Keep recording: continue straight away into a new part file using the CPU encoder.
-                if (_hardware && Status != RecorderStatus.Finishing && IsEncoderError(e.Error))
+
+                _step++;
+                if (early)
                 {
-                    _hardware = false;
+                    // nothing usable was written: try again into the same file
+                    try { if (File.Exists(CurrentFile)) File.Delete(CurrentFile); } catch { }
+                    _files.Remove(CurrentFile);
+                }
+                else
+                {
                     _segment++;
                     CurrentFile = Path.Combine(Path.GetDirectoryName(_baseFile),
                         Path.GetFileNameWithoutExtension(_baseFile) + $"_part{_segment}.mp4");
-                    var next = CurrentFile;
-                    System.Windows.Application.Current?.Dispatcher.BeginInvoke(new Action(() =>
-                    {
-                        StartInternal(resetClock: false);
-                        SwitchedToSoftware?.Invoke(next);
-                    }));
-                    return;
                 }
-                _clock.Stop();
-                Status = RecorderStatus.Idle;
-                StatusChanged?.Invoke(Status);
-                Failed?.Invoke(e.Error);
-            };
-            _startedAt = DateTime.Now;
-            if (resetClock) _clock.Reset();
-            _clock.Start();
-            Status = RecorderStatus.Recording;
-            StatusChanged?.Invoke(Status);
-            _recorder.Record(CurrentFile);
+                StartSegment(resetClock: false);
+                if (Status == RecorderStatus.Recording) ProfileChanged?.Invoke(_ladder[_step].Describe(), CurrentFile);
+            });
         }
 
         static bool IsEncoderError(string error)
@@ -153,7 +217,8 @@ namespace LuminaRecorder.Services
             if (string.IsNullOrEmpty(error)) return true;
             var e = error.ToLowerInvariant();
             return e.Contains("encoder") || e.Contains("0xc00d36b5") || e.Contains("hardware") || e.Contains("not accepting")
-                   || e.Contains("0x887a0005") || e.Contains("0x887a0006"); // GPU device removed / hung
+                   || e.Contains("0x887a0005") || e.Contains("0x887a0006") || e.Contains("0x887a0007") // GPU device removed / hung / reset
+                   || e.Contains("0x8007000e") || e.Contains("d3d") || e.Contains("dxgi") || e.Contains("capture");
         }
 
         void OnStatus(RecorderStatus s)
