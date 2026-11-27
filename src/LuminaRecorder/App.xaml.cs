@@ -20,11 +20,20 @@ namespace LuminaRecorder
                 return;
             }
 
+            DispatcherUnhandledException += OnUiException;
+            AppDomain.CurrentDomain.UnhandledException += (s, a) => { Log(a.ExceptionObject as Exception); Services.Boot.Log("UNHANDLED " + a.ExceptionObject); };
+            System.Threading.Tasks.TaskScheduler.UnobservedTaskException += (s, a) => { Log(a.Exception); a.SetObserved(); };
+
+            Services.Boot.Begin(e.Args);          // reads what the last start left behind, starts the watchdog
             ConfigureRendering(e.Args);
             LogSystemInfo();
-            DispatcherUnhandledException += OnUiException;
-            AppDomain.CurrentDomain.UnhandledException += (s, a) => Log(a.ExceptionObject as Exception);
-            base.OnStartup(e);
+            try { base.OnStartup(e); }
+            catch (Exception ex)
+            {
+                Log(ex); Services.Boot.Log("OnStartup threw " + ex);
+                MessageBox.Show("เปิดโปรแกรมไม่สำเร็จ: " + ex.Message + "\n\nรายละเอียดอยู่ที่ " + DataDir, "Lumina Recorder", MessageBoxButton.OK, MessageBoxImage.Error);
+                Shutdown(2);
+            }
         }
 
         // ---- graphics-driver safety ------------------------------------------------------------------------------
@@ -44,14 +53,13 @@ namespace LuminaRecorder
                 Directory.CreateDirectory(DataDir);
                 bool forceSoft = args.Any(a => a.Equals("--software-render", StringComparison.OrdinalIgnoreCase));
                 bool forceHard = args.Any(a => a.Equals("--hardware-render", StringComparison.OrdinalIgnoreCase));
-                if (forceHard) { File.Delete(SoftwareFlag); File.Delete(StartingFlag); }
-                if (forceSoft || File.Exists(StartingFlag)) File.WriteAllText(SoftwareFlag, DateTime.Now.ToString("s"));
+                if (forceHard) File.Delete(SoftwareFlag);
+                if (!forceHard && (forceSoft || Services.Boot.HadCrash)) File.WriteAllText(SoftwareFlag, DateTime.Now.ToString("s"));
                 if (File.Exists(SoftwareFlag))
                 {
                     System.Windows.Media.RenderOptions.ProcessRenderMode = System.Windows.Interop.RenderMode.SoftwareOnly;
                     SafeRendering = true;
                 }
-                File.WriteAllText(StartingFlag, DateTime.Now.ToString("s"));
             }
             catch { }
         }
@@ -59,7 +67,7 @@ namespace LuminaRecorder
         /// <summary>Called once the main window has been drawn: the start did not crash.</summary>
         internal static void MarkStartedOk()
         {
-            try { File.Delete(StartingFlag); } catch { }
+            Services.Boot.Finished();
         }
 
         protected override void OnExit(ExitEventArgs e)

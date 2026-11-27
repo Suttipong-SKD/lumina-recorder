@@ -7,6 +7,9 @@ namespace LuminaRecorder.Services
     /// <summary>Win32 interop used by the app. All coordinates are physical pixels (the process is Per-Monitor-V2 DPI aware).</summary>
     internal static class Native
     {
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        public static extern int MessageBoxW(IntPtr hWnd, string text, string caption, uint type);
+
         [StructLayout(LayoutKind.Sequential)]
         public struct RECT
         {

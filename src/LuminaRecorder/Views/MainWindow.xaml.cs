@@ -65,9 +65,8 @@ namespace LuminaRecorder.Views
         {
             base.OnSourceInitialized(e);
             _hwnd = new WindowInteropHelper(this).Handle;
-            Native.UseDarkTitleBar(_hwnd);
-            _hotkeys = new HotkeyService(_hwnd);
-            RegisterHotkeys();
+            Boot.Run(Boot.DarkTitle, () => Native.UseDarkTitleBar(_hwnd));
+            Boot.Run(Boot.Hotkeys, () => { _hotkeys = new HotkeyService(_hwnd); RegisterHotkeys(); });
         }
 
         void OnLoaded(object sender, RoutedEventArgs e)
@@ -78,11 +77,15 @@ namespace LuminaRecorder.Views
                 Left = _s.WindowLeft; Top = _s.WindowTop;
             }
 
-            _monitors = MonitorService.GetMonitors();
+            try { _monitors = MonitorService.GetMonitors(); }
+            catch (Exception ex) { App.Log(ex); Boot.Log("GetMonitors failed " + ex.Message); }
+            if (_monitors == null || _monitors.Count == 0)
+                _monitors = new List<MonitorInfo> { new MonitorInfo { Index = 1, DeviceName = "primary", IsPrimary = true, Scale = 1.0,
+                    Bounds = new PixelRect(0, 0, (int)SystemParameters.PrimaryScreenWidth, (int)SystemParameters.PrimaryScreenHeight) } };
             PixelRect.TryParse(_s.LastRegion, out var region);
             _region = region;
 
-            FillCombos();
+            FillCombos();   // plain lists only; devices are read after the window is on screen
             CursorCheck.IsChecked = _s.ShowCursor;
             ClicksCheck.IsChecked = _s.HighlightClicks;
             SysAudioCheck.IsChecked = _s.RecordSystemAudio;
@@ -98,16 +101,12 @@ namespace LuminaRecorder.Views
             }
 
             _loading = false;
-            ContentRendered += (s2, e2) =>
+            ContentRendered += async (s2, e2) =>
             {
-                // drawn without crashing: the graphics driver and WPF get along
-                var t = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
-                t.Tick += (s3, e3) => { t.Stop(); App.MarkStartedOk(); };
-                t.Start();
-                if (App.SafeRendering) ShowToast("เปิดในโหมดแสดงผลปลอดภัย (เพราะเปิดครั้งก่อนค้าง น่าจะเป็นเรื่องไดรเวอร์การ์ดจอ)");
+                Boot.WindowShown();
+                await LoadNativePartsAsync();
             };
             ApplyMode();
-            RestartMeters();
             RefreshRecent();
             UpdateHotkeyLabels();
             SetStatus($"ตรวจพบ {_monitors.Count} จอ · ไฟล์จะถูกบันทึกที่ {_s.EffectiveOutputFolder}");
@@ -130,7 +129,84 @@ namespace LuminaRecorder.Views
             Fill(FormatBox, _s.UseH265 ? "h265" : "h264", ("h264", "MP4 · H.264"), ("h265", "MP4 · H.265 (ไฟล์เล็ก)"));
             Fill(FpsBox, _s.Framerate.ToString(), ("24", "24 fps"), ("30", "30 fps"), ("60", "60 fps"));
             Fill(QualityBox, QualityKey(_s.Quality), ("40", "ประหยัดพื้นที่"), ("60", "มาตรฐาน"), ("75", "สูง"), ("90", "สูงสุด"));
-            FillDevices();
+            FillDeviceBox(SpeakerBox, new List<(string, string, bool)>(), _s.SpeakerDevice, "ลำโพงเริ่มต้นของ Windows");
+            FillDeviceBox(MicBox, new List<(string, string, bool)>(), _s.MicrophoneDevice, "ไมค์เริ่มต้นของ Windows");
+            WebcamBox.Items.Clear();
+            WebcamBox.Items.Add(new ComboBoxItem { Content = "ปิด", Tag = null });
+            WebcamBox.SelectedIndex = 0;
+            WebcamBox.IsEnabled = false;
+        }
+
+        /// <summary>
+        /// Everything that talks to graphics/audio drivers runs here, after the window is already visible, one step
+        /// at a time, on worker threads with timeouts. A step that crashes or hangs is skipped on the next start.
+        /// </summary>
+        async System.Threading.Tasks.Task LoadNativePartsAsync()
+        {
+            try
+            {
+                var devs = await Boot.RunAsync(Boot.Devices, () => new DeviceLists
+                {
+                    Speakers = SafeList(() => Recorder.GetSystemAudioLoopbackDevices().Select(d => (d.DeviceName, d.FriendlyName, d.IsDefaultDevice)).ToList()),
+                    Mics = SafeList(() => Recorder.GetSystemAudioCaptureDevices().Select(d => (d.DeviceName, d.FriendlyName, d.IsDefaultDevice)).ToList()),
+                    Cams = SafeList(() => Recorder.GetSystemVideoCaptureDevices().Select(d => (d.DeviceName, d.FriendlyName, false)).ToList()),
+                });
+                if (devs != null) ApplyDevices(devs);
+
+                if (CurrentMode == CaptureMode.Window) await RefreshWindowsAsync();
+
+                await BuildMetersAsync();
+            }
+            catch (Exception ex) { App.Log(ex); Boot.Log("LoadNativeParts threw " + ex.Message); }
+            finally
+            {
+                _nativeReady = true;
+                App.MarkStartedOk();
+                var skipped = Boot.Skipped;
+                if (skipped.Count > 0)
+                    ShowToast("ข้ามฟีเจอร์ที่ทำให้ค้างกับไดรเวอร์เครื่องนี้: " + string.Join(", ", skipped.Select(StepName)));
+                else if (App.SafeRendering)
+                    ShowToast("เปิดในโหมดแสดงผลปลอดภัย (เพราะเปิดครั้งก่อนค้าง น่าจะเป็นเรื่องไดรเวอร์การ์ดจอ)");
+            }
+        }
+
+        bool _nativeReady;
+
+        static string StepName(string s)
+        {
+            switch (s)
+            {
+                case Boot.Devices: return "รายชื่ออุปกรณ์เสียง/กล้อง";
+                case Boot.Windows: return "รายชื่อหน้าต่าง";
+                case Boot.Meters: return "มิเตอร์เสียง";
+                case Boot.Hotkeys: return "ปุ่มลัด";
+                case Boot.DarkTitle: return "แถบชื่อโหมดมืด";
+                default: return s;
+            }
+        }
+
+        sealed class DeviceLists
+        {
+            public List<(string, string, bool)> Speakers, Mics, Cams;
+        }
+
+        void ApplyDevices(DeviceLists d)
+        {
+            var wasLoading = _loading;
+            _loading = true;
+            try
+            {
+                FillDeviceBox(SpeakerBox, d.Speakers, _s.SpeakerDevice, "ลำโพงเริ่มต้นของ Windows");
+                FillDeviceBox(MicBox, d.Mics, _s.MicrophoneDevice, "ไมค์เริ่มต้นของ Windows");
+                WebcamBox.Items.Clear();
+                WebcamBox.Items.Add(new ComboBoxItem { Content = "ปิด", Tag = null });
+                foreach (var c in d.Cams) WebcamBox.Items.Add(new ComboBoxItem { Content = c.Item2, Tag = c.Item1 });
+                WebcamBox.SelectedItem = _s.WebcamOverlay
+                    ? WebcamBox.Items.Cast<ComboBoxItem>().FirstOrDefault(i => (string)i.Tag == _s.WebcamDevice) ?? WebcamBox.Items[Math.Min(1, WebcamBox.Items.Count - 1)]
+                    : WebcamBox.Items[0];
+                WebcamBox.IsEnabled = d.Cams.Count > 0;
+            }
+            finally { _loading = wasLoading; }
         }
 
         static string QualityKey(int q) => q >= 85 ? "90" : q >= 70 ? "75" : q >= 50 ? "60" : "40";
@@ -141,30 +217,6 @@ namespace LuminaRecorder.Views
             foreach (var (tag, text) in items)
                 box.Items.Add(new ComboBoxItem { Content = text, Tag = tag });
             box.SelectedItem = box.Items.Cast<ComboBoxItem>().FirstOrDefault(i => (string)i.Tag == selected) ?? box.Items[0];
-        }
-
-        void FillDevices()
-        {
-            var wasLoading = _loading;
-            _loading = true;
-            try
-            {
-                var speakers = SafeList(() => Recorder.GetSystemAudioLoopbackDevices().Select(d => (d.DeviceName, d.FriendlyName, d.IsDefaultDevice)).ToList());
-                var mics = SafeList(() => Recorder.GetSystemAudioCaptureDevices().Select(d => (d.DeviceName, d.FriendlyName, d.IsDefaultDevice)).ToList());
-                var cams = SafeList(() => Recorder.GetSystemVideoCaptureDevices().Select(d => (d.DeviceName, d.FriendlyName, false)).ToList());
-
-                FillDeviceBox(SpeakerBox, speakers, _s.SpeakerDevice, "ลำโพงเริ่มต้นของ Windows");
-                FillDeviceBox(MicBox, mics, _s.MicrophoneDevice, "ไมค์เริ่มต้นของ Windows");
-
-                WebcamBox.Items.Clear();
-                WebcamBox.Items.Add(new ComboBoxItem { Content = "ปิด", Tag = null });
-                foreach (var c in cams) WebcamBox.Items.Add(new ComboBoxItem { Content = c.Item2, Tag = c.Item1 });
-                WebcamBox.SelectedItem = _s.WebcamOverlay
-                    ? WebcamBox.Items.Cast<ComboBoxItem>().FirstOrDefault(i => (string)i.Tag == _s.WebcamDevice) ?? WebcamBox.Items[Math.Min(1, WebcamBox.Items.Count - 1)]
-                    : WebcamBox.Items[0];
-                WebcamBox.IsEnabled = cams.Count > 0;
-            }
-            finally { _loading = wasLoading; }
         }
 
         static List<(string, string, bool)> SafeList(Func<List<(string, string, bool)>> f)
@@ -413,16 +465,27 @@ namespace LuminaRecorder.Views
 
         void RefreshWindows()
         {
+            if (!_nativeReady) return;   // the first fill happens in LoadNativePartsAsync
+            _ = RefreshWindowsAsync();
+        }
+
+        async System.Threading.Tasks.Task RefreshWindowsAsync()
+        {
+            var list = await Boot.RunAsync(Boot.Windows, () => Recorder.GetWindows() ?? new List<RecordableWindow>(), 5000);
+            if (list == null)
+            {
+                WindowBox.Items.Clear();
+                WindowBox.Items.Add(new ComboBoxItem { Content = "(อ่านรายชื่อหน้าต่างไม่ได้ในเครื่องนี้ ใช้โหมดอื่นแทน)", Tag = null });
+                WindowBox.SelectedIndex = 0;
+                return;
+            }
             var wasLoading = _loading;
             _loading = true;
             try
             {
                 var current = (WindowBox.SelectedItem as ComboBoxItem)?.Tag as RecordableWindow;
                 WindowBox.Items.Clear();
-                List<RecordableWindow> windows;
-                try { windows = Recorder.GetWindows() ?? new List<RecordableWindow>(); }
-                catch { windows = new List<RecordableWindow>(); }
-                foreach (var w in windows.Where(w => !string.IsNullOrWhiteSpace(w.Title) && w.Handle != _hwnd))
+                foreach (var w in list.Where(w => !string.IsNullOrWhiteSpace(w.Title) && w.Handle != _hwnd))
                     WindowBox.Items.Add(new ComboBoxItem { Content = w.Title, Tag = w });
                 var keep = current == null ? null : WindowBox.Items.Cast<ComboBoxItem>().FirstOrDefault(i => ((RecordableWindow)i.Tag).Handle == current.Handle);
                 WindowBox.SelectedItem = keep ?? (WindowBox.Items.Count > 0 ? WindowBox.Items[0] : null);
@@ -430,7 +493,10 @@ namespace LuminaRecorder.Views
             finally { _loading = wasLoading; }
         }
 
-        void BtnRefreshWindows_Click(object sender, RoutedEventArgs e) => RefreshWindows();
+        void BtnRefreshWindows_Click(object sender, RoutedEventArgs e)
+        {
+            if (_nativeReady) _ = RefreshWindowsAsync();
+        }
 
         void WindowBox_SelectionChanged(object sender, SelectionChangedEventArgs e) { }
 
@@ -524,11 +590,23 @@ namespace LuminaRecorder.Views
 
         void RestartMeters()
         {
-            _sysMeter?.Dispose(); _sysMeter = null;
-            _micMeter?.Dispose(); _micMeter = null;
-            if (_s.RecordSystemAudio) _sysMeter = AudioMeter.TryCreate(false, _s.SpeakerDevice);
-            if (_s.RecordMicrophone) _micMeter = AudioMeter.TryCreate(true, _s.MicrophoneDevice);
             _meterTimer.Start();
+            if (!_nativeReady) return;                       // first creation: LoadNativePartsAsync
+            if (!Boot.Allowed(Boot.Meters)) return;
+            _ = BuildMetersAsync();
+        }
+
+        async System.Threading.Tasks.Task BuildMetersAsync()
+        {
+            bool sys = _s.RecordSystemAudio, mic = _s.RecordMicrophone;
+            string spk = _s.SpeakerDevice, mc = _s.MicrophoneDevice;
+            var made = await Boot.RunAsync(Boot.Meters, () => new AudioMeter[]
+            {
+                sys ? AudioMeter.TryCreate(false, spk) : null,
+                mic ? AudioMeter.TryCreate(true, mc) : null
+            }, 4000);
+            _sysMeter?.Dispose(); _micMeter?.Dispose();
+            _sysMeter = made?[0]; _micMeter = made?[1];
         }
 
         void UpdateMeters()
